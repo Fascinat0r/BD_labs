@@ -242,6 +242,46 @@ def delete__most_unprofitable_balance_but_check_unique_articles():
         conn.close()
 
 
+def increase_expenses_for_given_article(cursor, article_name, value):
+    print("Increase credit value by", value, "to operations from category", article_name)
+    cursor.execute('''UPDATE operations SET credit = credit + %s
+                      WHERE article_id IN (SELECT id FROM articles WHERE name=%s) RETURNING balance_id''',
+                   (value, article_name,))
+    balances = cursor.fetchall()
+    for row in balances:
+        cursor.execute('''UPDATE balance SET credit=credit+%s, amount=amount-%s WHERE id=%s''', (value, value, row[0]))
+
+
+def replace_article(old_article_name, new_article_name):
+    print("Replace", old_article_name, 'by', new_article_name)
+    if old_article_name == new_article_name:
+        raise PGException("Can't replace article by themself")
+
+    with psycopg2.connect(**db_params) as conn:
+        with conn.cursor(cursor_factory=DictCursor) as cursor:
+            cursor.execute('''UPDATE operations SET article_id=(select id from articles where name=%s)
+                              WHERE article_id=(select id from articles where name=%s)''',
+                           (new_article_name, old_article_name))
+            delete_article(cursor, old_article_name)
+            conn.commit()
+
+
+def replace_article_but_rollback(old_article_name, new_article_name):
+    print("Replace", old_article_name, 'by', new_article_name)
+    if old_article_name == new_article_name:
+        raise PGException("Can't replace article by themself")
+
+    with psycopg2.connect(**db_params) as conn:
+        with conn.cursor(cursor_factory=DictCursor) as cursor:
+            cursor.execute('''UPDATE operations SET article_id=(select id from articles where name=%s)
+                              WHERE article_id=(select id from articles where name=%s)''',
+                           (new_article_name, old_article_name))
+            delete_article(cursor, old_article_name)
+
+            print("Rollback...")
+            conn.rollback()
+
+
 def main():
     with psycopg2.connect(**db_params) as conn:
         conn.autocommit = True
@@ -267,7 +307,7 @@ def main():
         with conn.cursor(cursor_factory=DictCursor) as cursor:
             print_balance(cursor)
             # 4
-            calculate_profit_for_the_day(cursor, "2023-09-10")
+            calculate_profit_for_the_day(cursor, "2023-09-11")
             # 5
             not_used_articles_in_period(cursor, "2023-08-09", "2023-09-30")
             # 6
@@ -282,6 +322,22 @@ def main():
             delete_most_unprofitable(cursor)
             # 11
     delete__most_unprofitable_balance_but_check_unique_articles()
+    with psycopg2.connect(**db_params) as conn:
+        conn.autocommit = True
+        with conn.cursor(cursor_factory=DictCursor) as cursor:
+            print_operations(cursor)
+            print_balance(cursor)
+            # 12
+            increase_expenses_for_given_article(cursor, random.choice(articles), 1000)
+            print_operations(cursor)
+            print_balance(cursor)
+            # 13
+    replace_article(random.choice(articles), random.choice(articles))
+    with psycopg2.connect(**db_params) as conn:
+        conn.autocommit = True
+        with conn.cursor(cursor_factory=DictCursor) as cursor:
+            print_operations(cursor)
+    replace_article_but_rollback(random.choice(articles), random.choice(articles))
     with psycopg2.connect(**db_params) as conn:
         conn.autocommit = True
         with conn.cursor(cursor_factory=DictCursor) as cursor:
