@@ -344,4 +344,4 @@ def main():
             print_operations(cursor)
 
 
-main()
+# main()
