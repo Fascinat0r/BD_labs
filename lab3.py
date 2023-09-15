@@ -176,6 +176,7 @@ def delete_operation(cur, operation_id):
 
 
 def financial_flows(cur, start_date, end_date, article_ids, flow_type):
+    print("Потоки:")
     cur.execute('''CREATE TABLE IF NOT EXISTS calculate_result (
                     article_id integer,
                     article_name varchar,
