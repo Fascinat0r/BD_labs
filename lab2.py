@@ -59,6 +59,10 @@ def clear_all(cursor):
     cursor.execute("TRUNCATE TABLE operations RESTART IDENTITY CASCADE")
     cursor.execute("TRUNCATE TABLE articles RESTART IDENTITY CASCADE")
 
+    cursor.execute('''DROP TRIGGER IF EXISTS operation_update_protect ON operations''')
+    cursor.execute('''DROP TRIGGER IF EXISTS correct_balance ON balance''')
+
+
 
 def add_balance():
     conn = psycopg2.connect(**db_params)

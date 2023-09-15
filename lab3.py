@@ -131,46 +131,96 @@ def create_trigger_correct_balance(cur):
                         ''')
 
 
-def create_trigger_subject_update_protect(cur):
-    cur.execute('''CREATE OR REPLACE FUNCTION pre_upd_mark_subject_update_protect()
+def create_trigger_operation_update_protect(cur):
+    cur.execute('''CREATE OR REPLACE FUNCTION pre_upd_operation_update_protect()
                         RETURNS TRIGGER AS $$
                         BEGIN
-                         IF EXISTS(
-                        SELECT m.id FROM marks m INNER JOIN public.subjects s ON s.id = m.subject_id
-                        WHERE s.name = NEW.name) THEN
-
-                         RAISE EXCEPTION 'Нельзя изменять наименование предмета, если на него есть ссылки!';
+                         IF (NEW.balance_id IS NOT NULL) THEN
+                         RAISE EXCEPTION 'Нельзя изменять операцию, так как она уже содержится в балансе!';
                          END IF;
                          RETURN NEW; 
                         END;
                         $$ LANGUAGE plpgsql;
-                        CREATE OR REPLACE TRIGGER subject_update_protect
-                        BEFORE UPDATE ON subjects
+                        CREATE OR REPLACE TRIGGER operation_update_protect
+                        BEFORE UPDATE ON operations
                         FOR EACH ROW
-                        EXECUTE PROCEDURE pre_upd_mark_subject_update_protect()
+                        EXECUTE PROCEDURE pre_upd_operation_update_protect()
 
                         ''')
 
 
-def create_trigger_subject_delete_protect(cur):
-    cur.execute('''CREATE OR REPLACE FUNCTION pre_del_mark_subject_delete_protect()
+def create_trigger_operation_delete_protect(cur):
+    cur.execute('''CREATE OR REPLACE FUNCTION pre_del_operation_delete_protect()
                         RETURNS TRIGGER AS $$
                         BEGIN
-                         IF EXISTS(
-                        SELECT m.id FROM marks m
-                        WHERE m.subject_id = (SELECT s.id FROM subjects s WHERE s.name=OLD.name)) THEN
-
-                         RAISE EXCEPTION 'Нельзя удалить предмет, если на него есть ссылки!';
-                         END IF; 
-                         RETURN NEW;
+                         IF (OLD.balance_id IS NOT NULL) THEN
+                         RAISE EXCEPTION 'Нельзя удалить операцию, так как она уже содержится в балансе!';
+                         END IF;
+                         RETURN OLD; 
                         END;
                         $$ LANGUAGE plpgsql;
-                        CREATE OR REPLACE TRIGGER subject_delete_protect
-                        BEFORE DELETE ON subjects
+                        CREATE OR REPLACE TRIGGER operation_delete_protect
+                        BEFORE DELETE ON operations
                         FOR EACH ROW
-                        EXECUTE PROCEDURE pre_del_mark_subject_delete_protect()
+                        EXECUTE PROCEDURE pre_del_operation_delete_protect()
 
                         ''')
+
+
+def edit_operation(cur, operation_id, new_debit, new_credit):
+    cur.execute("UPDATE operations SET debit=%s, credit=%s WHERE id=%s", (new_debit, new_credit, operation_id))
+
+
+def delete_operation(cur, operation_id):
+    cur.execute('''DELETE FROM operations WHERE id=%s''', (operation_id,))
+
+
+def financial_flows(cur, start_date, end_date, article_ids, flow_type):
+    cur.execute('''CREATE TABLE IF NOT EXISTS calculate_result (
+                    article_id integer,
+                    article_name varchar,
+                    percentage numeric);
+                    
+                    CREATE OR REPLACE FUNCTION calculate_article_percentage(
+                        start_date date,
+                        end_date date,
+                        article_ids integer[],
+                        flow_type text
+                    )
+                    RETURNS TABLE (article_id integer, article_name varchar, percentage numeric) AS $$
+                    DECLARE
+                        total_amount numeric := 0;
+                        cur_article_id integer := 0;
+                    BEGIN
+                        -- Calculate the total amount of financial flows for the specified interval and flow type
+                        SELECT SUM(CASE WHEN flow_type = 'debit' THEN debit ELSE credit END)
+                        INTO total_amount
+                        FROM operations o
+                        WHERE o.create_date BETWEEN start_date AND end_date
+                        AND o.article_id = ANY(article_ids);
+                    
+                        -- Declare a cursor for the specified articles
+                        FOR cur_article_id IN SELECT unnest(article_ids) 
+                        LOOP
+                            -- Calculate the percentage for each article
+                            INSERT INTO calculate_result
+                            SELECT t.id, a.name, t.percent FROM (SELECT o.article_id AS id,
+                            (SUM(CASE WHEN flow_type = 'debit' THEN o.debit ELSE o.credit END) / total_amount) * 100
+                            AS percent
+                            FROM operations o INNER JOIN articles a ON a.id=o.article_id
+                            WHERE create_date BETWEEN start_date AND end_date
+                                  AND o.article_id = cur_article_id
+                            GROUP BY o.article_id) as t INNER JOIN articles a ON a.id=t.id;
+                        END LOOP;
+                        
+                        RETURN QUERY SELECT * FROM calculate_result;
+                    END;
+                    $$ LANGUAGE plpgsql;''')
+    cursor.execute("SELECT * FROM calculate_article_percentage(%s, %s, %s, %s);",
+                   (start_date, end_date, article_ids, flow_type))
+
+    for row in cur:
+        print(row[0:2], str(round(row[2], 2)) + '%')
 
 
 try:
@@ -215,16 +265,16 @@ try:
     with psycopg2.connect(**db_params) as conn:
         with conn.cursor(cursor_factory=DictCursor) as cursor:
             pass
-            # # add_mark(cursor, 1, 1, 1, 10)
+
             #
-            # create_trigger_subject_update_protect(cursor)
-            # # change_subjects_name(cursor, "Math", "Linux")
-            #
-            # create_trigger_subject_delete_protect(cursor)
-            # # delete_subject(cursor, "Math")
-            #
-            # # print_marks(cursor)
-            #
-            # increase_in_ratings(cursor, "2002", "2023")
+            create_trigger_operation_update_protect(cursor)
+            # edit_operation(cursor, 1, 1000, 1000)
+            add_operation(cursor, 999, 999, random.choice(articles))
+            edit_operation(cursor, 9, 1010, 1010)
+            print_operations(cursor)
+
+            create_trigger_operation_delete_protect(cursor)
+            financial_flows(cursor, '2023-09-10', '2023-09-15', [1, 2], 'debit')
+
 except PGException or psycopg2.errors.RaiseException as err:
     print(err)
